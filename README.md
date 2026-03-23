@@ -1,0 +1,1 @@
+# PatelVishwam-A1_Glossar_Flashcards-2458-words
