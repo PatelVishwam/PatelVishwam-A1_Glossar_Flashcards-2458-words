@@ -5388,27 +5388,34 @@ function _initFirebase(){
     _fbDb=firebase.database();
     const safeKey=ukey.replace(/[.#$\[\]\/]/g,'_');
     _fbRef=_fbDb.ref('a1glossar/'+safeKey+'/progress');
-    _fbReady=true;
     _setSyncDot('syncing','connecting...');
+    // Test connection first — only set _fbReady on success
     _fbRef.once('value').then(snap=>{
+      _fbReady=true;
       const remote=snap.val();
       if(remote&&remote.ts){
         _mergeRemote(remote);
-        _setSyncDot('synced','synced at '+new Date(remote.ts).toLocaleTimeString());
+        _setSyncDot('synced','synced · '+new Date(remote.ts).toLocaleTimeString());
       } else {
         fbPush(false);
       }
-    }).catch(()=>_setSyncDot('error','connection failed'));
-    _fbRef.on('value',snap=>{
-      const remote=snap.val();
-      if(remote&&remote.ts&&remote._src!==_fbSrcId()){
-        _mergeRemote(remote);
-        _setSyncDot('synced','synced at '+new Date(remote.ts).toLocaleTimeString());
-        if(session.length)renderCard();
-        if(document.getElementById('panel-stats').classList.contains('visible'))renderStats();
-      }
+      // Start live listener only after confirmed connection
+      _fbRef.on('value',snap=>{
+        const remote=snap.val();
+        if(remote&&remote.ts&&remote._src!==_fbSrcId()){
+          _mergeRemote(remote);
+          _setSyncDot('synced','synced · '+new Date(remote.ts).toLocaleTimeString());
+          if(session.length)renderCard();
+          if(document.getElementById('panel-stats').classList.contains('visible'))renderStats();
+        }
+      });
+    }).catch(err=>{
+      _fbReady=false;
+      const msg=err&&err.code?err.code:'unknown';
+      _setSyncDot('error','failed: '+msg);
+      console.warn('FB connect error:',err);
     });
-  }catch(err){_setSyncDot('error','init error');console.warn('FB init:',err);}
+  }catch(err){_fbReady=false;_setSyncDot('error','init error: '+(err.message||err));console.warn('FB init:',err);}
 }
 
 function _fbSrcId(){
@@ -5493,9 +5500,14 @@ function saveFbSetup(){
   setTimeout(()=>{
     _initFirebase();
     setTimeout(()=>{
-      if(_fbReady){statusEl.textContent='Connected!';statusEl.className='fb-status-msg ok';closeFbSetup();fbPush(true);}
-      else{statusEl.textContent='Connection failed. Check config and database rules.';statusEl.className='fb-status-msg err';}
-    },2000);
+      if(_fbReady){statusEl.textContent='✅ Connected! Saving your progress...';statusEl.className='fb-status-msg ok';closeFbSetup();fbPush(true);}
+      else{
+        const dot=document.getElementById('sync-dot');
+        const errDetail=dot?dot.title:'';
+        statusEl.textContent='❌ Connection failed. '+(errDetail.includes('permission')||errDetail.includes('PERMISSION')?'Fix your database rules (see note above).':errDetail.includes('not configured')||errDetail.includes('unknown')?'Check your databaseURL is correct.':'Check config and database rules.');
+        statusEl.className='fb-status-msg err';
+      }
+    },6000);
   },300);
 }
 
@@ -5520,7 +5532,7 @@ _initFirebase();
     <div class="fb-steps"><ol>
       <li>Go to <a href="https://console.firebase.google.com" target="_blank" style="color:var(--accent2)">console.firebase.google.com</a></li>
       <li>Create a project → Add a <b>Web app</b> → Enable <b>Realtime Database</b></li>
-      <li>Set database rules to: <code style="font-size:.75rem;background:var(--cream);padding:1px 4px;border-radius:4px">{ "rules": { ".read": true, ".write": true } }</code></li>
+      <li>Set database rules to: <code style="font-size:.75rem;background:var(--cream);padding:1px 4px;border-radius:4px">{ "rules": { ".read": true, ".write": true } }</code> <span style="color:var(--learn);font-weight:600">— must be <em>true</em> not <em>"true"</em></span></li>
       <li>Go to Project Settings → your app → copy the <b>firebaseConfig</b> object</li>
       <li>Paste it below (JSON format) and pick a personal Sync Key</li>
     </ol></div>
