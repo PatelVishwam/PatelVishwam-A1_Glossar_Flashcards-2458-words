@@ -502,6 +502,31 @@ html.dark .card-front.g-tint-das{background:linear-gradient(135deg,rgba(74,173,1
 @media(max-width:520px){.art-btn{padding:11px 4px;font-size:1.1rem}.art-btns{gap:8px}}
 
 </style>
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<style>
+/* ===== FIREBASE SYNC ===== */
+.sync-dot{width:9px;height:9px;border-radius:50%;background:#9e9e9e;transition:background .4s;flex-shrink:0;cursor:pointer;title:'Sync status'}
+.sync-dot.synced{background:var(--known)}.sync-dot.syncing{background:var(--fav);animation:pulse .8s infinite}
+.sync-dot.error{background:var(--learn)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.fb-setup-overlay{display:none;position:fixed;inset:0;z-index:900;background:rgba(26,20,16,.82);backdrop-filter:blur(6px);align-items:center;justify-content:center;padding:16px;overflow-y:auto}
+.fb-setup-overlay.open{display:flex;animation:fadeIn .25s ease}
+.fb-setup-box{background:var(--paper);border:1.5px solid var(--border);border-radius:20px;padding:26px 22px;width:min(460px,95vw);box-shadow:0 20px 60px rgba(0,0,0,.25)}
+.fb-setup-title{font-family:'Fraunces',serif;font-size:1.3rem;font-weight:900;color:var(--ink);margin-bottom:6px}
+.fb-setup-sub{font-size:.82rem;color:var(--warm);margin-bottom:16px;line-height:1.5}
+.fb-field-label{font-size:.72rem;font-weight:600;color:var(--warm);letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px;margin-top:10px}
+.fb-input{width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;background:var(--cream);font-family:'DM Sans',sans-serif;font-size:.85rem;color:var(--ink);outline:none;transition:border-color .18s;box-sizing:border-box}
+.fb-input:focus{border-color:var(--accent2)}
+.fb-textarea{width:100%;min-height:110px;padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;background:var(--cream);font-family:'DM Sans',sans-serif;font-size:.78rem;color:var(--ink);outline:none;resize:vertical;box-sizing:border-box;line-height:1.4}
+.fb-textarea:focus{border-color:var(--accent2)}
+.fb-hint{font-size:.72rem;color:var(--warm);margin-top:4px;line-height:1.45}
+.fb-status-msg{font-size:.79rem;margin-top:10px;min-height:18px;text-align:center}
+.fb-status-msg.ok{color:var(--known)}.fb-status-msg.err{color:var(--learn)}
+.fb-steps{background:var(--cream);border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:.78rem;color:var(--ink);line-height:1.7}
+.fb-steps ol{margin:0;padding-left:18px}
+</style>
 </head>
 <body>
 <div class="app">
@@ -515,6 +540,7 @@ html.dark .card-front.g-tint-das{background:linear-gradient(135deg,rgba(74,173,1
   </div>
   <div class="header-actions">
       <div class="streak-pill" id="streak-pill" title="Day streak 🔥"><span>🔥</span><span class="streak-num" id="streak-num">0</span></div>
+    <div class="sync-dot" id="sync-dot" title="Sync: not configured" onclick="openFbSetup()"></div>
     <button class="focus-btn" id="focus-btn" title="Focus mode" onclick="toggleFocus()">🎯</button>
     <button class="icon-btn" id="fav-mode-btn" title="Favourites only" onclick="toggleFavMode()">⭐</button>
     <button class="icon-btn" id="dark-btn" title="Toggle dark mode" onclick="toggleDark()">🌙</button>
@@ -770,6 +796,10 @@ html.dark .card-front.g-tint-das{background:linear-gradient(135deg,rgba(74,173,1
     <button class="btn-data" onclick="backupJSON()">💾 Backup</button>
     <button class="btn-data" onclick="document.getElementById('restore-input').click()">📤 Restore</button>
     <input type="file" id="restore-input" accept=".json" style="display:none" onchange="restoreJSON(this)">
+  </div>
+  <div style="display:flex;gap:8px;justify-content:center;margin-bottom:12px">
+    <button class="btn-data" onclick="fbPush(true)">☁️ Sync Now</button>
+    <button class="btn-data" onclick="openFbSetup()">⚙️ Sync Settings</button>
   </div>
   <div class="stats-reset"><button class="btn-danger" onclick="resetStats()">Reset All Progress</button></div>
   <div class="stat-list-section" id="stat-list-section">
@@ -5333,6 +5363,162 @@ markNotInterested=function(e){
   },{passive:true});
 })();
 
+
+// ============================================================
+// FIREBASE CLOUD SYNC
+// ============================================================
+const FB_CFG_KEY='a1_fb_config_v1';
+const FB_UKEY_KEY='a1_fb_userkey_v1';
+let _fbDb=null,_fbRef=null,_fbSyncTimer=null,_fbReady=false;
+
+function _setSyncDot(state,tip){
+  const d=document.getElementById('sync-dot');
+  if(!d)return;
+  d.className='sync-dot '+state;
+  d.title='Sync: '+tip;
+}
+
+function _initFirebase(){
+  let cfg,ukey;
+  try{cfg=JSON.parse(localStorage.getItem(FB_CFG_KEY)||'null');}catch{cfg=null;}
+  ukey=(localStorage.getItem(FB_UKEY_KEY)||'').trim();
+  if(!cfg||!ukey){_setSyncDot('','not configured');return;}
+  try{
+    if(!firebase.apps.length)firebase.initializeApp(cfg);
+    _fbDb=firebase.database();
+    const safeKey=ukey.replace(/[.#$\[\]\/]/g,'_');
+    _fbRef=_fbDb.ref('a1glossar/'+safeKey+'/progress');
+    _fbReady=true;
+    _setSyncDot('syncing','connecting...');
+    _fbRef.once('value').then(snap=>{
+      const remote=snap.val();
+      if(remote&&remote.ts){
+        _mergeRemote(remote);
+        _setSyncDot('synced','synced at '+new Date(remote.ts).toLocaleTimeString());
+      } else {
+        fbPush(false);
+      }
+    }).catch(()=>_setSyncDot('error','connection failed'));
+    _fbRef.on('value',snap=>{
+      const remote=snap.val();
+      if(remote&&remote.ts&&remote._src!==_fbSrcId()){
+        _mergeRemote(remote);
+        _setSyncDot('synced','synced at '+new Date(remote.ts).toLocaleTimeString());
+        if(session.length)renderCard();
+        if(document.getElementById('panel-stats').classList.contains('visible'))renderStats();
+      }
+    });
+  }catch(err){_setSyncDot('error','init error');console.warn('FB init:',err);}
+}
+
+function _fbSrcId(){
+  if(!window._fbSrc)window._fbSrc='src_'+Math.random().toString(36).slice(2,8);
+  return window._fbSrc;
+}
+
+function _buildPayload(){
+  return{known:ST.known,favs:ST.favs,ni:_NI,srs:_getSRS(),wrong:JSON.parse(localStorage.getItem('a1_wrong')||'{}'),streak:JSON.parse(localStorage.getItem('a1_streak')||'{}'),font:_fontScale||100,dark:ST.dark,ts:Date.now(),_src:_fbSrcId()};
+}
+
+function _mergeRemote(remote){
+  if(remote.known){Object.entries(remote.known).forEach(([k,v])=>{if(ST.known[k]===undefined)ST.known[k]=v;else if(v===true)ST.known[k]=true;});SS();}
+  if(remote.favs){Object.assign(ST.favs,remote.favs);SS();}
+  if(remote.ni){Object.assign(_NI,remote.ni);saveNI(_NI);}
+  if(remote.srs){const local=_getSRS();Object.entries(remote.srs).forEach(([k,v])=>{if(!local[k]||v.lvl>local[k].lvl)local[k]=v;});_saveSRS(local);}
+  if(remote.wrong){let wd=JSON.parse(localStorage.getItem('a1_wrong')||'{}');Object.entries(remote.wrong).forEach(([k,v])=>{if(!wd[k]||v>wd[k])wd[k]=v;});try{localStorage.setItem('a1_wrong',JSON.stringify(wd));}catch(e){}}
+  if(remote.streak){const ls=JSON.parse(localStorage.getItem('a1_streak')||'{}');if(!ls.count||(remote.streak.count||0)>ls.count){try{localStorage.setItem('a1_streak',JSON.stringify(remote.streak));}catch(e){}const el=document.getElementById('streak-num');if(el)el.textContent=remote.streak.count||0;}}
+  if(remote.font&&remote.font!==_fontScale){_fontScale=remote.font;localStorage.setItem('a1_font',_fontScale);_applyFont();}
+  if(typeof remote.dark==='boolean'&&remote.dark!==ST.dark){ST.dark=remote.dark;document.documentElement.classList.toggle('dark',ST.dark);const db=document.getElementById('dark-btn');if(db)db.textContent=ST.dark?'☀️':'🌙';SS();}
+}
+
+function fbPush(showFeedback){
+  if(!_fbReady||!_fbRef){if(showFeedback)_showMnemToast('☁️ Sync not configured. Tap the dot in the header.');return;}
+  _setSyncDot('syncing','saving...');
+  _fbRef.set(_buildPayload())
+  .then(()=>{_setSyncDot('synced','synced at '+new Date().toLocaleTimeString());if(showFeedback)_showMnemToast('✅ Progress synced to cloud!');})
+  .catch(err=>{_setSyncDot('error','save failed');if(showFeedback)_showMnemToast('❌ Sync failed. Check your connection.');console.warn('FB push:',err);});
+}
+
+function _fbSchedulePush(){
+  if(!_fbReady)return;
+  clearTimeout(_fbSyncTimer);
+  _fbSyncTimer=setTimeout(()=>fbPush(false),3000);
+}
+
+function openFbSetup(){
+  const ov=document.getElementById('fb-setup-overlay');if(!ov)return;
+  try{const cfg=localStorage.getItem(FB_CFG_KEY);if(cfg)document.getElementById('fb-config-input').value=JSON.stringify(JSON.parse(cfg),null,2);}catch(e){}
+  document.getElementById('fb-key-input').value=localStorage.getItem(FB_UKEY_KEY)||'';
+  document.getElementById('fb-setup-status').textContent='';
+  ov.classList.add('open');
+}
+function closeFbSetup(){document.getElementById('fb-setup-overlay').classList.remove('open');}
+function saveFbSetup(){
+  const rawCfg=document.getElementById('fb-config-input').value.trim();
+  const ukey=document.getElementById('fb-key-input').value.trim();
+  const statusEl=document.getElementById('fb-setup-status');
+  if(!rawCfg||!ukey){statusEl.textContent='Please fill in both fields.';statusEl.className='fb-status-msg err';return;}
+  let cfg;try{cfg=JSON.parse(rawCfg);}catch(e){statusEl.textContent='Invalid JSON. Check the config format.';statusEl.className='fb-status-msg err';return;}
+  if(!cfg.databaseURL){statusEl.textContent='Missing databaseURL in config.';statusEl.className='fb-status-msg err';return;}
+  statusEl.textContent='Connecting...';statusEl.className='fb-status-msg';
+  localStorage.setItem(FB_CFG_KEY,JSON.stringify(cfg));
+  localStorage.setItem(FB_UKEY_KEY,ukey);
+  _fbReady=false;_fbDb=null;_fbRef=null;
+  try{firebase.apps.forEach(app=>app.delete());}catch(e){}
+  setTimeout(()=>{
+    _initFirebase();
+    setTimeout(()=>{
+      if(_fbReady){statusEl.textContent='Connected!';statusEl.className='fb-status-msg ok';closeFbSetup();fbPush(true);}
+      else{statusEl.textContent='Connection failed. Check config and database rules.';statusEl.className='fb-status-msg err';}
+    },2000);
+  },300);
+}
+
+// Patch save functions to trigger sync
+const _SSorig=SS;
+SS=function(){_SSorig();_fbSchedulePush();};
+const _saveNIorig=saveNI;
+saveNI=function(d){_saveNIorig(d);_fbSchedulePush();};
+const _saveSRSorig=_saveSRS;
+_saveSRS=function(d){_saveSRSorig(d);_fbSchedulePush();};
+
+// Init on load
+_initFirebase();
+
 </script>
+
+<!-- FIREBASE SETUP OVERLAY -->
+<div class="fb-setup-overlay" id="fb-setup-overlay">
+  <div class="fb-setup-box">
+    <div class="fb-setup-title">☁️ Cloud Sync Setup</div>
+    <div class="fb-setup-sub">Sync your progress across all devices automatically using your own free Firebase database.</div>
+    <div class="fb-steps"><ol>
+      <li>Go to <a href="https://console.firebase.google.com" target="_blank" style="color:var(--accent2)">console.firebase.google.com</a></li>
+      <li>Create a project → Add a <b>Web app</b> → Enable <b>Realtime Database</b></li>
+      <li>Set database rules to: <code style="font-size:.75rem;background:var(--cream);padding:1px 4px;border-radius:4px">{ "rules": { ".read": true, ".write": true } }</code></li>
+      <li>Go to Project Settings → your app → copy the <b>firebaseConfig</b> object</li>
+      <li>Paste it below (JSON format) and pick a personal Sync Key</li>
+    </ol></div>
+    <div class="fb-field-label">Firebase Config (JSON)</div>
+    <textarea class="fb-textarea" id="fb-config-input" placeholder='{
+  "apiKey": "AIza...",
+  "authDomain": "your-app.firebaseapp.com",
+  "databaseURL": "https://your-app-default-rtdb.firebaseio.com",
+  "projectId": "your-app",
+  "storageBucket": "your-app.appspot.com",
+  "messagingSenderId": "123456",
+  "appId": "1:123456:web:abc"
+}'></textarea>
+    <div class="fb-field-label" style="margin-top:12px">Sync Key <span style="font-weight:400;text-transform:none;letter-spacing:0">(your private passphrase — same on all devices)</span></div>
+    <input class="fb-input" id="fb-key-input" type="text" placeholder="e.g. manju-german-2025" autocomplete="off">
+    <div class="fb-hint">⚠️ Keep this secret — anyone with your key can read your progress. Use something personal and not guessable.</div>
+    <div class="fb-status-msg" id="fb-setup-status"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+      <button class="btn btn-secondary" style="padding:9px 16px" onclick="closeFbSetup()">Cancel</button>
+      <button class="btn btn-primary" style="padding:9px 16px" onclick="saveFbSetup()">Connect</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
