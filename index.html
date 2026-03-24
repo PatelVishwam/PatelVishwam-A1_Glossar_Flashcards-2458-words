@@ -5453,13 +5453,38 @@ function openFbSetup(){
   ov.classList.add('open');
 }
 function closeFbSetup(){document.getElementById('fb-setup-overlay').classList.remove('open');}
+function _parseFbConfig(raw){
+  // Try pure JSON first
+  try{return JSON.parse(raw);}catch(e){}
+  // Strip JS wrapper: "const firebaseConfig = {...};" or "var firebaseConfig={...}"
+  let s=raw.replace(/^[\s\S]*?firebaseConfig\s*=\s*/,'')  // remove "const firebaseConfig ="
+            .replace(/^[\s\S]*?initializeApp\s*\(\s*/,'') // remove "initializeApp("
+            .replace(/\)\s*;?\s*$/,'')                    // remove trailing ");"
+            .replace(/;\s*$/,'')                           // remove trailing ";"
+            .trim();
+  // Quote unquoted JS keys: apiKey: → "apiKey":
+  s=s.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g,'$1"$2":');
+  // Remove trailing commas before } or ]
+  s=s.replace(/,\s*([}\]])/g,'$1');
+  try{return JSON.parse(s);}catch(e){}
+  // Last resort: extract individual values with regex
+  const cfg={};
+  const keys=['apiKey','authDomain','databaseURL','projectId','storageBucket','messagingSenderId','appId','measurementId'];
+  keys.forEach(k=>{
+    const m=new RegExp(k+'\\s*:\\s*["\']([^"\']+)["\']').exec(raw);
+    if(m)cfg[k]=m[1];
+  });
+  if(cfg.apiKey&&cfg.databaseURL)return cfg;
+  return null;
+}
 function saveFbSetup(){
   const rawCfg=document.getElementById('fb-config-input').value.trim();
   const ukey=document.getElementById('fb-key-input').value.trim();
   const statusEl=document.getElementById('fb-setup-status');
   if(!rawCfg||!ukey){statusEl.textContent='Please fill in both fields.';statusEl.className='fb-status-msg err';return;}
-  let cfg;try{cfg=JSON.parse(rawCfg);}catch(e){statusEl.textContent='Invalid JSON. Check the config format.';statusEl.className='fb-status-msg err';return;}
-  if(!cfg.databaseURL){statusEl.textContent='Missing databaseURL in config.';statusEl.className='fb-status-msg err';return;}
+  const cfg=_parseFbConfig(rawCfg);
+  if(!cfg){statusEl.textContent='Could not read config. Paste the firebaseConfig object from Firebase console.';statusEl.className='fb-status-msg err';return;}
+  if(!cfg.databaseURL){statusEl.textContent='Missing databaseURL. Make sure Realtime Database is enabled in your Firebase project.';statusEl.className='fb-status-msg err';return;}
   statusEl.textContent='Connecting...';statusEl.className='fb-status-msg';
   localStorage.setItem(FB_CFG_KEY,JSON.stringify(cfg));
   localStorage.setItem(FB_UKEY_KEY,ukey);
@@ -5500,15 +5525,17 @@ _initFirebase();
       <li>Paste it below (JSON format) and pick a personal Sync Key</li>
     </ol></div>
     <div class="fb-field-label">Firebase Config (JSON)</div>
-    <textarea class="fb-textarea" id="fb-config-input" placeholder='{
-  "apiKey": "AIza...",
-  "authDomain": "your-app.firebaseapp.com",
-  "databaseURL": "https://your-app-default-rtdb.firebaseio.com",
-  "projectId": "your-app",
-  "storageBucket": "your-app.appspot.com",
-  "messagingSenderId": "123456",
-  "appId": "1:123456:web:abc"
-}'></textarea>
+    <textarea class="fb-textarea" id="fb-config-input" placeholder="Paste the firebaseConfig from Firebase console — any format works:
+
+const firebaseConfig = {
+  apiKey: &quot;AIza...&quot;,
+  authDomain: &quot;your-app.firebaseapp.com&quot;,
+  databaseURL: &quot;https://your-app-default-rtdb.firebaseio.com&quot;,
+  projectId: &quot;your-app&quot;,
+  storageBucket: &quot;your-app.appspot.com&quot;,
+  messagingSenderId: &quot;123456&quot;,
+  appId: &quot;1:123456:web:abc&quot;
+};"></textarea>
     <div class="fb-field-label" style="margin-top:12px">Sync Key <span style="font-weight:400;text-transform:none;letter-spacing:0">(your private passphrase — same on all devices)</span></div>
     <input class="fb-input" id="fb-key-input" type="text" placeholder="e.g. manju-german-2025" autocomplete="off">
     <div class="fb-hint">⚠️ Keep this secret — anyone with your key can read your progress. Use something personal and not guessable.</div>
