@@ -4773,7 +4773,8 @@ function restoreJSON(input){
   reader.onload=function(ev){
     try{
       const d=JSON.parse(ev.target.result);
-      if(d.version!=='a1_glossar_v1')throw new Error('Wrong file');
+      if(!d.known&&!d.favs&&!d.ni)throw new Error('Wrong file format');
+      // Backup saves raw German keys - just assign directly
       if(d.known)Object.assign(ST.known,d.known);
       if(d.favs)Object.assign(ST.favs,d.favs);
       if(d.ni)Object.assign(_NI,d.ni);
@@ -4784,7 +4785,9 @@ function restoreJSON(input){
       if(d.font){_fontScale=d.font;localStorage.setItem('a1_font',d.font);}
       renderStats();startSession();_applyFont();
       _showMnemToast('✅ Progress restored successfully!');
-    }catch(err){_showMnemToast('❌ Invalid backup file.');}
+      // Push to Firebase after restore
+      setTimeout(()=>fbPush(false),1000);
+    }catch(err){_showMnemToast('❌ Could not read file. Make sure it is a valid backup.');}
     input.value='';
   };
   reader.readAsText(file);
@@ -5423,16 +5426,21 @@ function _fbSrcId(){
   return window._fbSrc;
 }
 
+// Sanitize object keys for Firebase (removes . # $ [ ] / from keys)
+function _fbEnc(k){return k.replace(/\|/g,'|P|').replace(/\./g,'|D|').replace(/#/g,'|H|').replace(/\$/g,'|S|').replace(/\[/g,'|L|').replace(/\]/g,'|R|').replace(/\//g,'|F|');}
+function _fbDec(k){return k.replace(/\|F\|/g,'/').replace(/\|R\|/g,']').replace(/\|L\|/g,'[').replace(/\|S\|/g,'$').replace(/\|H\|/g,'#').replace(/\|D\|/g,'.').replace(/\|P\|/g,'|');}
+function _fbSan(obj){if(!obj||typeof obj!=='object')return obj;const out={};Object.entries(obj).forEach(([k,v])=>{out[_fbEnc(k)]=v;});return out;}
 function _buildPayload(){
-  return{known:ST.known,favs:ST.favs,ni:_NI,srs:_getSRS(),wrong:JSON.parse(localStorage.getItem('a1_wrong')||'{}'),streak:JSON.parse(localStorage.getItem('a1_streak')||'{}'),font:_fontScale||100,dark:ST.dark,ts:Date.now(),_src:_fbSrcId()};
+  return{known:_fbSan(ST.known),favs:_fbSan(ST.favs),ni:_fbSan(_NI),srs:_fbSan(_getSRS()),wrong:_fbSan(JSON.parse(localStorage.getItem('a1_wrong')||'{}')),streak:JSON.parse(localStorage.getItem('a1_streak')||'{}'),font:_fontScale||100,dark:ST.dark,ts:Date.now(),_src:_fbSrcId()};
 }
 
+function _unsanObj(obj){if(!obj)return obj;const out={};Object.entries(obj).forEach(([k,v])=>{out[_fbDec(k)]=v;});return out;}
 function _mergeRemote(remote){
-  if(remote.known){Object.entries(remote.known).forEach(([k,v])=>{if(ST.known[k]===undefined)ST.known[k]=v;else if(v===true)ST.known[k]=true;});SS();}
-  if(remote.favs){Object.assign(ST.favs,remote.favs);SS();}
-  if(remote.ni){Object.assign(_NI,remote.ni);saveNI(_NI);}
-  if(remote.srs){const local=_getSRS();Object.entries(remote.srs).forEach(([k,v])=>{if(!local[k]||v.lvl>local[k].lvl)local[k]=v;});_saveSRS(local);}
-  if(remote.wrong){let wd=JSON.parse(localStorage.getItem('a1_wrong')||'{}');Object.entries(remote.wrong).forEach(([k,v])=>{if(!wd[k]||v>wd[k])wd[k]=v;});try{localStorage.setItem('a1_wrong',JSON.stringify(wd));}catch(e){}}
+  if(remote.known){const kn=_unsanObj(remote.known);Object.entries(kn).forEach(([k,v])=>{if(ST.known[k]===undefined)ST.known[k]=v;else if(v===true)ST.known[k]=true;});SS();}
+  if(remote.favs){Object.assign(ST.favs,_unsanObj(remote.favs));SS();}
+  if(remote.ni){Object.assign(_NI,_unsanObj(remote.ni));saveNI(_NI);}
+  if(remote.srs){const local=_getSRS();const rs=_unsanObj(remote.srs);Object.entries(rs).forEach(([k,v])=>{if(!local[k]||v.lvl>local[k].lvl)local[k]=v;});_saveSRS(local);}
+  if(remote.wrong){let wd=JSON.parse(localStorage.getItem('a1_wrong')||'{}');const rw=_unsanObj(remote.wrong);Object.entries(rw).forEach(([k,v])=>{if(!wd[k]||v>wd[k])wd[k]=v;});try{localStorage.setItem('a1_wrong',JSON.stringify(wd));}catch(e){}}
   if(remote.streak){const ls=JSON.parse(localStorage.getItem('a1_streak')||'{}');if(!ls.count||(remote.streak.count||0)>ls.count){try{localStorage.setItem('a1_streak',JSON.stringify(remote.streak));}catch(e){}const el=document.getElementById('streak-num');if(el)el.textContent=remote.streak.count||0;}}
   if(remote.font&&remote.font!==_fontScale){_fontScale=remote.font;localStorage.setItem('a1_font',_fontScale);_applyFont();}
   if(typeof remote.dark==='boolean'&&remote.dark!==ST.dark){ST.dark=remote.dark;document.documentElement.classList.toggle('dark',ST.dark);const db=document.getElementById('dark-btn');if(db)db.textContent=ST.dark?'☀️':'🌙';SS();}
